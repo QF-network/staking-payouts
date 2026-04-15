@@ -20,7 +20,8 @@ import BN from 'bn.js';
 import { log } from './logger';
 
 const DEBUG = process.env.PAYOUTS_DEBUG;
-const MAX_CALLS = 3;
+const MAX_CALLS = 1;
+const MAX_SEND_ATTEMPTS = 3;
 
 export interface ServiceArgs {
 	api: ApiPromise;
@@ -440,6 +441,9 @@ async function signAndSendTxs(
 
 	// Send all the transactions
 	log.info(`Getting ready to send ${txs.length} transactions.`);
+	let nextNonce = (await api.rpc.system.accountNextIndex(signingKeys.address)).toBn();
+	DEBUG && log.debug(`Starting nonce: ${nextNonce.toString()}`);
+
 	for (const [i, tx] of txs.entries()) {
 		log.info(
 			`Sending ${tx.method.section}.${tx.method.method} (tx ${i + 1}/${
@@ -456,11 +460,42 @@ async function signAndSendTxs(
 			);
 
 		try {
-			const res = await tx.signAndSend(signingKeys, { nonce: -1 });
-			log.info(`Node response to tx: ${res.toString()}`);
+			for (let attempt = 1; attempt <= MAX_SEND_ATTEMPTS; attempt++) {
+				try {
+					const res = await tx.signAndSend(signingKeys, { nonce: nextNonce });
+					log.info(`Node response to tx: ${res.toString()}`);
+					nextNonce = nextNonce.addn(1);
+					break;
+				} catch (e) {
+					if (isOutdatedTxError(e) && attempt < MAX_SEND_ATTEMPTS) {
+						log.warn(
+							`Node reported stale tx nonce for tx ${i + 1}/${
+								txs.length
+							}. Refreshing nonce and retrying (${attempt}/${MAX_SEND_ATTEMPTS}).`
+						);
+						nextNonce = (
+							await api.rpc.system.accountNextIndex(signingKeys.address)
+						).toBn();
+						continue;
+					}
+
+					throw e;
+				}
+			}
 		} catch (e) {
 			log.error(`Tx failed to sign and send (tx ${i + 1}/${txs.length})`);
 			throw e;
 		}
 	}
+}
+
+function isOutdatedTxError(error: unknown): boolean {
+	if (!(error instanceof Error)) {
+		return false;
+	}
+
+	return (
+		error.message.includes('Transaction is outdated') ||
+		error.message.includes('Priority is too low')
+	);
 }
