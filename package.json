@@ -28,20 +28,19 @@
     "build": "tsc -p tsconfig.json"
   },
   "devDependencies": {
-    "@substrate/dev": "^0.7.1",
-    "@types/node": "^20.14.10",
-    "@types/yargs": "^17.0.32",
+    "@substrate/dev": "^0.9.0",
+    "@types/node": "^25.6.0",
+    "@types/yargs": "^17.0.35",
     "typescript": "^5.5.3"
   },
   "dependencies": {
-    "@polkadot/api": "^12.2.1",
-    "ansi-regex": "^6.0.1",
-    "winston": "^3.13.1",
-    "yargs": "^17.7.2"
+    "@polkadot/api": "^16.5.6",
+    "ansi-regex": "^6.2.2",
+    "winston": "^3.19.0",
+    "yargs": "^18.0.0"
   },
   "resolutions": {
     "ansi-regex": "^5.0.1",
     "tmpl": "1.0.5"
-  },
-  "packageManager": "yarn@4.5.3"
+  }
 }

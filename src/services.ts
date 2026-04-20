@@ -20,7 +20,8 @@ import BN from 'bn.js';
 import { log } from './logger';
 
 const DEBUG = process.env.PAYOUTS_DEBUG;
-const MAX_CALLS = 3;
+const MAX_CALLS = 1;
+const MAX_SEND_ATTEMPTS = 3;
 
 export interface ServiceArgs {
 	api: ApiPromise;
@@ -78,14 +79,34 @@ export async function collectPayouts({
 	await signAndSendTxs(api, payouts, suri);
 }
 
-export async function payoutClaimedForAddressForEra(api: ApiPromise, stashAddress: string, eraIndex: number): Promise<boolean> {
-	const claimed = (await api.query.staking.claimedRewards<Vec<u32>>(eraIndex, stashAddress)).length > 0;
-	if (claimed) {
-		// payout already issued
-		return true;
+export async function unclaimedPayoutPagesForAddressForEra(
+	api: ApiPromise,
+	stashAddress: string,
+	eraIndex: number
+): Promise<number[]> {
+	const exposureForEra = await api.query.staking.erasStakersOverview<Option<any>>(
+		eraIndex,
+		stashAddress
+	);
+
+	if (exposureForEra.isNone) {
+		return [];
 	}
-	const exposureForEra = await api.query.staking.erasStakersOverview<Option<any>>(eraIndex, stashAddress);
-	return exposureForEra.isNone;
+
+	const pageCount = exposureForEra.unwrap().pageCount.toNumber();
+	if (pageCount <= 0) {
+		return [];
+	}
+
+	const claimedRewards = await api.query.staking.claimedRewards<Vec<u32>>(
+		eraIndex,
+		stashAddress
+	);
+	const claimedPages = new Set(claimedRewards.map((page) => page.toNumber()));
+
+	return Array.from({ length: pageCount }, (_, page) => page).filter(
+		(page) => !claimedPages.has(page)
+	);
 }
 
 export async function listPendingPayouts({
@@ -103,6 +124,21 @@ export async function listPendingPayouts({
 		return null;
 	}
 	const currEra = activeInfoOpt.unwrap().index.toNumber();
+	const lastClaimableEra = currEra - 1;
+
+	if (lastClaimableEra < 0) {
+		log.info('No claimable eras yet.');
+		return null;
+	}
+
+	const normalizedEraDepth = Math.max(0, Math.floor(eraDepth));
+	const firstEraToCheck = Math.max(0, lastClaimableEra - normalizedEraDepth);
+
+	if (firstEraToCheck !== lastClaimableEra - eraDepth) {
+		log.info(
+			`Adjusted era range to available history: checking eras ${firstEraToCheck} through ${lastClaimableEra}.`
+		);
+	}
 
 	// Get all the validator address to get payouts for
 	const validatorStashes = [];
@@ -136,18 +172,38 @@ export async function listPendingPayouts({
 			continue;
 		}
 
-		const controller = controllerOpt.unwrap();
-		// Check for unclaimed payouts from `current-eraDepth` to `current` era
-		// The current era is not claimable. Therefore we need to substract by 1.
-		for (let e = (currEra - 1) - eraDepth; e < (currEra - 1); e++) {
-			const payoutClaimed = await payoutClaimedForAddressForEra(api, controller.toString(), e);
-			if (payoutClaimed) {
+		// Check for unclaimed payouts from the earliest relevant completed era
+		// through the latest claimable era. The active era itself is not claimable.
+		for (let e = firstEraToCheck; e <= lastClaimableEra; e++) {
+			const unclaimedPages = await unclaimedPayoutPagesForAddressForEra(
+				api,
+				stash,
+				e
+			);
+			if (!unclaimedPages.length) {
 				continue;
 			}
 			// Check if they received points that era
 			if (await hasEraPoints(api, stash, e)) {
-				const payoutStakes = api.tx.staking.payoutStakers(stash, e);
-				payouts.push(payoutStakes);
+				log.info(
+					`Validator ${stash}, era ${e}: unclaimed payout pages [${unclaimedPages.join(
+						', '
+					)}]`
+				);
+
+				const payoutStakersByPage = (api.tx.staking as unknown as {
+					payoutStakersByPage?: (validatorStash: string, era: number, page: number) => SubmittableExtrinsic<'promise', ISubmittableResult>;
+				}).payoutStakersByPage;
+
+				if (payoutStakersByPage) {
+					for (const page of unclaimedPages) {
+						payouts.push(payoutStakersByPage(stash, e, page));
+					}
+				} else {
+					for (const _page of unclaimedPages) {
+						payouts.push(api.tx.staking.payoutStakers(stash, e));
+					}
+				}
 			}
 		}
 	}
@@ -440,6 +496,9 @@ async function signAndSendTxs(
 
 	// Send all the transactions
 	log.info(`Getting ready to send ${txs.length} transactions.`);
+	let nextNonce = (await api.rpc.system.accountNextIndex(signingKeys.address)).toBn();
+	DEBUG && log.debug(`Starting nonce: ${nextNonce.toString()}`);
+
 	for (const [i, tx] of txs.entries()) {
 		log.info(
 			`Sending ${tx.method.section}.${tx.method.method} (tx ${i + 1}/${
@@ -456,11 +515,42 @@ async function signAndSendTxs(
 			);
 
 		try {
-			const res = await tx.signAndSend(signingKeys, { nonce: -1 });
-			log.info(`Node response to tx: ${res.toString()}`);
+			for (let attempt = 1; attempt <= MAX_SEND_ATTEMPTS; attempt++) {
+				try {
+					const res = await tx.signAndSend(signingKeys, { nonce: nextNonce });
+					log.info(`Node response to tx: ${res.toString()}`);
+					nextNonce = nextNonce.addn(1);
+					break;
+				} catch (e) {
+					if (isOutdatedTxError(e) && attempt < MAX_SEND_ATTEMPTS) {
+						log.warn(
+							`Node reported stale tx nonce for tx ${i + 1}/${
+								txs.length
+							}. Refreshing nonce and retrying (${attempt}/${MAX_SEND_ATTEMPTS}).`
+						);
+						nextNonce = (
+							await api.rpc.system.accountNextIndex(signingKeys.address)
+						).toBn();
+						continue;
+					}
+
+					throw e;
+				}
+			}
 		} catch (e) {
 			log.error(`Tx failed to sign and send (tx ${i + 1}/${txs.length})`);
 			throw e;
 		}
 	}
+}
+
+function isOutdatedTxError(error: unknown): boolean {
+	if (!(error instanceof Error)) {
+		return false;
+	}
+
+	return (
+		error.message.includes('Transaction is outdated') ||
+		error.message.includes('Priority is too low')
+	);
 }

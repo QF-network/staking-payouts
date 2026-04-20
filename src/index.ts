@@ -3,12 +3,13 @@
 /* eslint-disable @typescript-eslint/await-thenable */
 
 import yargs from 'yargs';
+import { hideBin } from 'yargs/helpers';
 
 import { collect, commission, ls, lsNominators } from './handlers';
 import { log } from './logger';
 
 async function main() {
-	await yargs
+	await yargs(hideBin(process.argv))
 		.options({
 			ws: {
 				alias: 'w',
