@@ -1,0 +1,52 @@
+name: Build and Push Container
+on:
+  pull_request:
+    paths:
+      - Dockerfile
+      - .dockerignore
+      - package.json
+      - yarn.lock
+      - .github/workflows/build-container.yml
+  push:
+    branches:
+      - main
+    paths:
+      - Dockerfile
+      - .dockerignore
+      - package.json
+      - yarn.lock
+      - .github/workflows/build-container.yml
+jobs:
+  build_and_push:
+    runs-on: ubuntu-24.04
+    steps:
+    - name: Checkout repo
+      uses: actions/checkout@v6
+
+    - name: Get app version
+      id: get-version
+      run: |
+        APP_VERSION=$(node -p "require('./package.json').version")
+        echo "app_version=$APP_VERSION" >> "$GITHUB_OUTPUT"
+
+    - name: Build image
+      uses: redhat-actions/buildah-build@v2
+      with:
+        image: theqfnetwork/staking-payouts
+        tags: ${{ steps.get-version.outputs.app_version }} latest
+        containerfiles: ./Dockerfile
+
+    - name: Log in to Docker Hub
+      if: github.event_name == 'push'
+      uses: docker/login-action@v4
+      with:
+        username: ${{ vars.DOCKERHUB_USERNAME }}
+        password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+    - name: Push image
+      if: github.event_name == 'push'
+      uses: redhat-actions/push-to-registry@v2
+      with:
+        image: theqfnetwork/staking-payouts
+        tags: ${{ steps.get-version.outputs.app_version }} latest
+        registry: docker.io

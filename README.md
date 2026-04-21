@@ -75,14 +75,14 @@ yarn run build
 ```bash
 # NPM
 payouts collect \
-  -w wss://kusama.api.onfinality.io/public \
+  -w wss://mainnet.qfnode.net \
   -s 15Jbynf3EcRqdHV1K14LXYh7PQFTbp5wiXfrc4kbMReR9KxA \
   -u ./key.example.txt \
   -e 8
 
 # Github
 node build/index.js collect \
-  -w wss://kusama.api.onfinality.io/public \
+  -w wss://mainnet.qfnode.net \
   -s 15Jbynf3EcRqdHV1K14LXYh7PQFTbp5wiXfrc4kbMReR9KxA \
   -u ./key.example.txt \
   -e 8
@@ -92,7 +92,7 @@ node build/index.js collect \
 
 ```bash
 payouts collect \
-  -w wss://kusama.api.onfinality.io/public \
+  -w wss://mainnet.qfnode.net \
   --stashesFile ./stashes.example.json \
   --suriFile ./key.example.txt
 ```
@@ -101,7 +101,7 @@ payouts collect \
 
 ```bash
 payouts ls \
-  -w wss://kusama.api.onfinality.io/public \
+  -w wss://mainnet.qfnode.net \
   --stashesFile ./stashes.example.json \
   -e 8
 ```
@@ -136,7 +136,7 @@ Options:
       --help         Show help                                         [boolean]
       --version      Show version number                               [boolean]
   -w, --ws           The API endpoint to connect to, e.g.
-                     wss://kusama-rpc.polkadot.io            [string] [required]
+                     wss://mainnet.qfnode.net            [string] [required]
   -S, --stashesFile  Path to .json file containing an array of the stash
                      addresses to call payouts for.                     [string]
   -s, --stashes      Array of stash addresses to call payouts for. Required if
@@ -162,9 +162,16 @@ docker build -t payouts .
 
 ### Run
 
+Before run you should configure parameters:
+1. Stash accounts, you can pass account with ``-s`` or you can pass json file with ``-S`` flag.
+2. You should store your secret seed in file and pass that file with command ``-u``
+
 ```bash
-docker run payouts collect \
-  -w wss://kusama.api.onfinality.io/public \
+docker run --rm \
+  -v "$PWD:/work" \
+  -w /work \
+  payouts collect \
+  -w wss://mainnet.qfnode.net \
   -s GCporqtiw7ybKYUqAftjvUAjZnp3x9gfrWsTy1GrvrGwmYT \
   -u ./key.example.txt
 ```
