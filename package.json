@@ -31,7 +31,7 @@
     "@substrate/dev": "^0.9.0",
     "@types/node": "^25.6.0",
     "@types/yargs": "^17.0.35",
-    "typescript": "^5.5.3"
+    "typescript": "^7.0.2"
   },
   "dependencies": {
     "@polkadot/api": "^16.5.6",
